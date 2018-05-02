@@ -52,7 +52,7 @@ use std::mem;
 mod parser;
 
 fn main() {
-    let data = parser::read_file(std::path::Path::new("res/n31w098.zip"));
+    let data = parser::read_file(std::path::Path::new("res/n31w098"), false);
     println!("{:?}", data);
     return;
     // The first step of any vulkan program is to create an instance.
