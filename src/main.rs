@@ -24,6 +24,7 @@ extern crate winit;
 // winit, and winit doesn't know about vulkano, so import a crate that will provide a link between
 // the two.
 extern crate vulkano_win;
+extern crate zip;
 
 use vulkano_win::VkSurfaceBuild;
 
@@ -48,8 +49,12 @@ use vulkano::sync::GpuFuture;
 
 use std::sync::Arc;
 use std::mem;
+mod parser;
 
 fn main() {
+    let data = parser::read_file(std::path::Path::new("res/n31w098.zip"));
+    println!("{:?}", data);
+    return;
     // The first step of any vulkan program is to create an instance.
     let instance = {
         // When we create an instance, we have to pass a list of extensions that we want to enable.
@@ -78,10 +83,14 @@ fn main() {
     // For the sake of the example we are just going to use the first device, which should work
     // most of the time.
     let physical = vulkano::instance::PhysicalDevice::enumerate(&instance)
-        .next().expect("no device available");
+        .next()
+        .expect("no device available");
     // Some little debug infos.
-    println!("Using device: {} (type: {:?})", physical.name(), physical.ty());
-
+    println!(
+        "Using device: {} (type: {:?})",
+        physical.name(),
+        physical.ty()
+    );
 
     // The objective of this example is to draw a triangle on a window. To do so, we first need to
     // create a surface that is wrapped in a window.
@@ -93,7 +102,9 @@ fn main() {
     //
     // This returns a vulkano::swapchain::Surface object wrapped in a cross-platform vulkano-winit window.
     let mut events_loop = winit::EventsLoop::new();
-    let window = winit::WindowBuilder::new().build_vk_surface(&events_loop, instance.clone()).unwrap();
+    let window = winit::WindowBuilder::new()
+        .build_vk_surface(&events_loop, instance.clone())
+        .unwrap();
 
     // Get the dimensions of the viewport. These variables need to be mutable since the viewport
     // can change size.
@@ -112,10 +123,13 @@ fn main() {
     // queue to handle data transfers in parallel. In this example we only use one queue.
     //
     // We have to choose which queues to use early on, because we will need this info very soon.
-    let queue = physical.queue_families().find(|&q| {
-        // We take the first queue that supports drawing to our window.
-        q.supports_graphics() && window.is_supported(q).unwrap_or(false)
-    }).expect("couldn't find a graphical queue family");
+    let queue = physical
+        .queue_families()
+        .find(|&q| {
+            // We take the first queue that supports drawing to our window.
+            q.supports_graphics() && window.is_supported(q).unwrap_or(false)
+        })
+        .expect("couldn't find a graphical queue family");
 
     // Now initializing the device. This is probably the most important object of Vulkan.
     //
@@ -139,11 +153,15 @@ fn main() {
     let (device, mut queues) = {
         let device_ext = vulkano::device::DeviceExtensions {
             khr_swapchain: true,
-            .. vulkano::device::DeviceExtensions::none()
+            ..vulkano::device::DeviceExtensions::none()
         };
 
-        Device::new(physical, physical.supported_features(), &device_ext,
-                    [(queue, 0.5)].iter().cloned()).expect("failed to create device")
+        Device::new(
+            physical,
+            physical.supported_features(),
+            &device_ext,
+            [(queue, 0.5)].iter().cloned(),
+        ).expect("failed to create device")
     };
 
     // Since we can request multiple queues, the `queues` variable is in fact an iterator. In this
@@ -157,7 +175,8 @@ fn main() {
     let (mut swapchain, mut images) = {
         // Querying the capabilities of the surface. When we create the swapchain we can only
         // pass values that are allowed by the capabilities.
-        let caps = window.capabilities(physical)
+        let caps = window
+            .capabilities(physical)
             .expect("failed to get surface capabilities");
 
         // We choose the dimensions of the swapchain to match the current dimensions of the window.
@@ -174,23 +193,47 @@ fn main() {
         let format = caps.supported_formats[0].0;
 
         // Please take a look at the docs for the meaning of the parameters we didn't mention.
-        Swapchain::new(device.clone(), window.clone(), caps.min_image_count, format,
-                       dimensions, 1, caps.supported_usage_flags, &queue,
-                       SurfaceTransform::Identity, alpha, PresentMode::Fifo, true,
-                       None).expect("failed to create swapchain")
+        Swapchain::new(
+            device.clone(),
+            window.clone(),
+            caps.min_image_count,
+            format,
+            dimensions,
+            1,
+            caps.supported_usage_flags,
+            &queue,
+            SurfaceTransform::Identity,
+            alpha,
+            PresentMode::Fifo,
+            true,
+            None,
+        ).expect("failed to create swapchain")
     };
 
     // We now create a buffer that will store the shape of our triangle.
     let vertex_buffer = {
         #[derive(Debug, Clone)]
-        struct Vertex { position: [f32; 2] }
+        struct Vertex {
+            position: [f32; 2],
+        }
         impl_vertex!(Vertex, position);
 
-        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), [
-            Vertex { position: [-0.5, -0.25] },
-            Vertex { position: [0.0, 0.5] },
-            Vertex { position: [0.25, -0.1] }
-        ].iter().cloned()).expect("failed to create buffer")
+        CpuAccessibleBuffer::from_iter(
+            device.clone(),
+            BufferUsage::all(),
+            [
+                Vertex {
+                    position: [-0.5, -0.25],
+                },
+                Vertex {
+                    position: [0.0, 0.5],
+                },
+                Vertex {
+                    position: [0.25, -0.1],
+                },
+            ].iter()
+                .cloned(),
+        ).expect("failed to create buffer")
     };
 
     // The next step is to create the shaders.
@@ -234,7 +277,8 @@ void main() {
     // The next step is to create a *render pass*, which is an object that describes where the
     // output of the graphics pipeline will go. It describes the layout of the images
     // where the colors, depth and/or stencil information will be written.
-    let render_pass = Arc::new(single_pass_renderpass!(device.clone(),
+    let render_pass = Arc::new(
+        single_pass_renderpass!(device.clone(),
         attachments: {
             // `color` is a custom name we give to the first and only attachment.
             color: {
@@ -260,11 +304,13 @@ void main() {
             // No depth-stencil attachment is indicated with empty brackets.
             depth_stencil: {}
         }
-    ).unwrap());
+    ).unwrap(),
+    );
 
     // Before we draw we have to create what is called a pipeline. This is similar to an OpenGL
     // program, but much more specific.
-    let pipeline = Arc::new(GraphicsPipeline::start()
+    let pipeline = Arc::new(
+        GraphicsPipeline::start()
         // We need to indicate the layout of the vertices.
         // The type `SingleBufferDefinition` actually contains a template parameter corresponding
         // to the type of each vertex. But in this code it is automatically inferred.
@@ -284,14 +330,15 @@ void main() {
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
         // Now that our builder is filled, we call `build()` to obtain an actual pipeline.
         .build(device.clone())
-        .unwrap());
+        .unwrap(),
+    );
 
     // The render pass we created above only describes the layout of our framebuffers. Before we
     // can draw we also need to create the actual framebuffers.
     //
     // Since we need to draw to multiple images, we are going to create a different framebuffer for
     // each image.
-    let mut framebuffers: Option<Vec<Arc<vulkano::framebuffer::Framebuffer<_,_>>>> = None;
+    let mut framebuffers: Option<Vec<Arc<vulkano::framebuffer::Framebuffer<_, _>>>> = None;
 
     // Initialization is finally finished!
 
@@ -335,8 +382,8 @@ void main() {
                 // Simply restarting the loop is the easiest way to fix this issue.
                 Err(SwapchainCreationError::UnsupportedDimensions) => {
                     continue;
-                },
-                Err(err) => panic!("{:?}", err)
+                }
+                Err(err) => panic!("{:?}", err),
             };
 
             mem::replace(&mut swapchain, new_swapchain);
@@ -350,11 +397,20 @@ void main() {
         // Because framebuffers contains an Arc on the old swapchain, we need to
         // recreate framebuffers as well.
         if framebuffers.is_none() {
-            let new_framebuffers = Some(images.iter().map(|image| {
-                Arc::new(Framebuffer::start(render_pass.clone())
-                    .add(image.clone()).unwrap()
-                    .build().unwrap())
-            }).collect::<Vec<_>>());
+            let new_framebuffers = Some(
+                images
+                    .iter()
+                    .map(|image| {
+                        Arc::new(
+                            Framebuffer::start(render_pass.clone())
+                                .add(image.clone())
+                                .unwrap()
+                                .build()
+                                .unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            );
             mem::replace(&mut framebuffers, new_framebuffers);
         }
 
@@ -365,15 +421,15 @@ void main() {
         //
         // This function can block if no image is available. The parameter is an optional timeout
         // after which the function call will return an error.
-        let (image_num, acquire_future) = match swapchain::acquire_next_image(swapchain.clone(),
-                                                                              None) {
-            Ok(r) => r,
-            Err(AcquireError::OutOfDate) => {
-                recreate_swapchain = true;
-                continue;
-            },
-            Err(err) => panic!("{:?}", err)
-        };
+        let (image_num, acquire_future) =
+            match swapchain::acquire_next_image(swapchain.clone(), None) {
+                Ok(r) => r,
+                Err(AcquireError::OutOfDate) => {
+                    recreate_swapchain = true;
+                    continue;
+                }
+                Err(err) => panic!("{:?}", err),
+            };
 
         // In order to draw, we have to build a *command buffer*. The command buffer object holds
         // the list of commands that are going to be executed.
@@ -447,13 +503,19 @@ void main() {
         // Handling the window events in order to close the program when the user wants to close
         // it.
         let mut done = false;
-        events_loop.poll_events(|ev| {
-            match ev {
-                winit::Event::WindowEvent { event: winit::WindowEvent::Closed, .. } => done = true,
-                winit::Event::WindowEvent { event: winit::WindowEvent::Resized(_, _), .. } => recreate_swapchain = true,
-                _ => ()
-            }
+        events_loop.poll_events(|ev| match ev {
+            winit::Event::WindowEvent {
+                event: winit::WindowEvent::Closed,
+                ..
+            } => done = true,
+            winit::Event::WindowEvent {
+                event: winit::WindowEvent::Resized(_, _),
+                ..
+            } => recreate_swapchain = true,
+            _ => (),
         });
-        if done { return; }
+        if done {
+            return;
+        }
     }
 }
