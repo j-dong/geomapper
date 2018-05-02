@@ -26,6 +26,10 @@ extern crate winit;
 extern crate vulkano_win;
 extern crate zip;
 
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+
 use vulkano_win::VkSurfaceBuild;
 
 use vulkano::buffer::BufferUsage;
