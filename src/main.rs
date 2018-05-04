@@ -56,9 +56,6 @@ use std::mem;
 mod parser;
 
 fn main() {
-    let data = parser::read_file(std::path::Path::new("res/n31w098"), false);
-    println!("{:?}", data);
-    return;
     // The first step of any vulkan program is to create an instance.
     let instance = {
         // When we create an instance, we have to pass a list of extensions that we want to enable.
@@ -264,8 +261,13 @@ void main() {
         #[src = "
 #version 450
 layout(location = 0) out vec4 f_color;
+
+layout(push_constant) uniform PushConstants {
+    vec4 color;
+} push_constants;
+
 void main() {
-    f_color = vec4(1.0, 0.0, 0.0, 1.0);
+    f_color = push_constants.color;
 }
 "]
         struct Dummy;
@@ -471,7 +473,7 @@ void main() {
                       }]),
                       scissors: None,
                   },
-                  vertex_buffer.clone(), (), ())
+                  vertex_buffer.clone(), (), [1.0, 0.0, 0.0, 1.0] as [f32; 4])
             .unwrap()
 
             // We leave the render pass by calling `draw_end`. Note that if we had multiple
@@ -493,8 +495,19 @@ void main() {
             // present command at the end of the queue. This means that it will only be presented once
             // the GPU has finished executing the command buffer that draws the triangle.
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
-            .then_signal_fence_and_flush().unwrap();
-        previous_frame_end = Box::new(future) as Box<_>;
+            .then_signal_fence_and_flush();
+        match future {
+            Ok(future) => {
+                previous_frame_end = Box::new(future) as Box<_>;
+            },
+            Err(vulkano::sync::FlushError::OutOfDate) => {
+                recreate_swapchain = true;
+                previous_frame_end = Box::new(vulkano::sync::now(device.clone())) as Box<_>;
+            }
+            Err(err) => {
+                panic!("{:?}", err);
+            }
+        };
 
         // Note that in more complex programs it is likely that one of `acquire_next_image`,
         // `command_buffer::submit`, or `present` will block for some time. This happens when the
