@@ -370,8 +370,9 @@ void main() {
     let mut previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
 
     let mut previous_time = Instant::now();
-    let mut color: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
-    let mut timer = 0.0f64;
+    let mut push_constants = fs::ty::PushConstants {
+        color: [1.0, 0.0, 0.0, 1.0],
+    };
 
     loop {
         // It is important to call this function from time to time, otherwise resources will keep
@@ -380,9 +381,8 @@ void main() {
         // already processed, and frees the resources that are no longer needed.
         previous_frame_end.cleanup_finished();
 
-        color[0] = timer as f32;
         let elapsed = previous_time.elapsed();
-        timer = (timer + elapsed.subsec_nanos() as f64 / 1_000_000_000.0).fract();
+        push_constants.color[0] = (push_constants.color[0] + elapsed.subsec_nanos() as f32 / 1000000000.0).fract();
         previous_time = Instant::now();
 
         // If the swapchain needs to be recreated, recreate it
@@ -484,7 +484,7 @@ void main() {
                       }]),
                       scissors: None,
                   },
-                  vertex_buffer.clone(), (), color)
+                  vertex_buffer.clone(), (), push_constants)
             .unwrap()
 
             // We leave the render pass by calling `draw_end`. Note that if we had multiple
