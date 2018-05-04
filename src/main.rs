@@ -53,6 +53,8 @@ use vulkano::sync::GpuFuture;
 
 use std::sync::Arc;
 use std::mem;
+use std::time::Instant;
+
 mod parser;
 
 fn main() {
@@ -367,12 +369,21 @@ void main() {
     // that, we store the submission of the previous frame here.
     let mut previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
 
+    let mut previous_time = Instant::now();
+    let mut color: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    let mut timer = 0.0f64;
+
     loop {
         // It is important to call this function from time to time, otherwise resources will keep
         // accumulating and you will eventually reach an out of memory error.
         // Calling this function polls various fences in order to determine what the GPU has
         // already processed, and frees the resources that are no longer needed.
         previous_frame_end.cleanup_finished();
+
+        color[0] = timer as f32;
+        let elapsed = previous_time.elapsed();
+        timer = (timer + elapsed.subsec_nanos() as f64 / 1_000_000_000.0).fract();
+        previous_time = Instant::now();
 
         // If the swapchain needs to be recreated, recreate it
         if recreate_swapchain {
@@ -473,7 +484,7 @@ void main() {
                       }]),
                       scissors: None,
                   },
-                  vertex_buffer.clone(), (), [1.0, 0.0, 0.0, 1.0] as [f32; 4])
+                  vertex_buffer.clone(), (), color)
             .unwrap()
 
             // We leave the render pass by calling `draw_end`. Note that if we had multiple
