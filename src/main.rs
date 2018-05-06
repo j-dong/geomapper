@@ -48,14 +48,66 @@ use vulkano::swapchain::SurfaceTransform;
 use vulkano::swapchain::Swapchain;
 use vulkano::swapchain::AcquireError;
 use vulkano::swapchain::SwapchainCreationError;
-use vulkano::sync::now;
 use vulkano::sync::GpuFuture;
+use vulkano::image::ImmutableImage;
+use vulkano::image::Dimensions;
+use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
+use vulkano::sampler::Sampler;
+use vulkano::format;
 
 use std::sync::Arc;
 use std::mem;
 use std::time::Instant;
 
 mod parser;
+
+#[derive(Copy, Clone, Debug)]
+struct DummyIter {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    block_size: usize,
+    period: usize,
+}
+
+impl DummyIter {
+    fn get_value(&self) -> f32 {
+        let bx = self.x / self.block_size;
+        let by = self.y / self.block_size;
+        let major = (bx + by) % self.period;
+        let minor = 2 * self.block_size - (self.x % self.block_size + self.y % self.block_size);
+        (major as f32 + minor as f32 / (2.0f32 * self.block_size as f32))
+            / self.period as f32
+    }
+}
+
+impl Iterator for DummyIter {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        let res = self.get_value();
+        self.x += 1;
+        if self.x >= self.width {
+            if self.y < self.height {
+                self.y += 1;
+                self.x = 0;
+            } else {
+                self.x = self.width;
+                return None;
+            }
+        }
+        Some(res)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let consumed = self.x + self.y * self.width;
+        let size = self.width * self.height;
+        (size - consumed, Some(size - consumed))
+    }
+}
+
+impl ExactSizeIterator for DummyIter { }
 
 fn main() {
     // The first step of any vulkan program is to create an instance.
@@ -250,7 +302,15 @@ fn main() {
         #[src = "
 #version 450
 layout(location = 0) in vec2 position;
+
+layout(push_constant) uniform PushConstants {
+    vec4 color;
+} push_constants;
+
+layout(location = 0) out vec2 vs_pos;
+
 void main() {
+    vs_pos = position;
     gl_Position = vec4(position, 0.0, 1.0);
 }
 "]
@@ -264,12 +324,16 @@ void main() {
 #version 450
 layout(location = 0) out vec4 f_color;
 
+layout(binding = 0) uniform sampler2D tex;
+
 layout(push_constant) uniform PushConstants {
     vec4 color;
 } push_constants;
 
+layout(location = 0) in vec2 vs_pos;
+
 void main() {
-    f_color = push_constants.color;
+    f_color = push_constants.color + vec4(0.0, texture(tex, vs_pos).r, 0.0, 0.0);
 }
 "]
         struct Dummy;
@@ -350,6 +414,25 @@ void main() {
 
     // Initialization is finally finished!
 
+    // create image
+    let im_width = 512u32;
+    let im_height = 512u32;
+    let (image, image_created) = ImmutableImage::from_iter(DummyIter {
+        x: 0,
+        y: 0,
+        width: im_width as usize,
+        height: im_height as usize,
+        block_size: 16,
+        period: 8,
+    }, Dimensions::Dim2d { width: im_width, height: im_height },
+    format::R32Sfloat, queue.clone()).unwrap();
+
+    // allocate descriptor set for sampler
+    let desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
+        .add_sampled_image(image.clone(),
+            Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
+        .build().unwrap());
+
     // In some situations, the swapchain will become invalid by itself. This includes for example
     // when the window is resized (as the images of the swapchain will no longer match the
     // window's) or, on Android, when the application went to the background and goes back to the
@@ -367,7 +450,7 @@ void main() {
     //
     // Destroying the `GpuFuture` blocks until the GPU is finished executing it. In order to avoid
     // that, we store the submission of the previous frame here.
-    let mut previous_frame_end = Box::new(now(device.clone())) as Box<GpuFuture>;
+    let mut previous_frame_end = Box::new(image_created) as Box<GpuFuture>;
 
     let mut previous_time = Instant::now();
     let mut push_constants = fs::ty::PushConstants {
@@ -484,7 +567,7 @@ void main() {
                       }]),
                       scissors: None,
                   },
-                  vertex_buffer.clone(), (), push_constants)
+                  vertex_buffer.clone(), desc_set.clone(), push_constants)
             .unwrap()
 
             // We leave the render pass by calling `draw_end`. Note that if we had multiple
