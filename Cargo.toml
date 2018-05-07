@@ -3,6 +3,9 @@ name = "geomapper"
 version = "0.1.0"
 authors = ["Jack Youstra <jack@youstra.com>", "James Dong <dong.james.sept14@gmail.com>"]
 
+[profile.release]
+debug = true
+
 [dependencies]
 vulkano = "0.9.0"
 vulkano-shader-derive = "0.9.0"

@@ -11,9 +11,11 @@ use self::byteorder::{LittleEndian, ReadBytesExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileData {
-    rows: u64,
-    cols: u64,
-    points: Vec<f32>,
+    pub rows: u64,
+    pub cols: u64,
+    pub points: Vec<f32>,
+    pub min_height: f32,
+    pub max_height: f32,
 }
 
 pub fn read_file(filename: &Path, compressed: bool) -> FileData {
@@ -38,6 +40,8 @@ fn read_file_compressed(filename: &Path) -> FileData {
     let mut rows: u64 = 0;
     let mut cellsize: f64 = 0.0;
     let mut no_data: f32 = -9999.0;
+    let mut max_height: f32 = -::std::f32::INFINITY;
+    let mut min_height: f32 = ::std::f32::INFINITY;
     let mut floats = Vec::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("Zipped file won't unzip");
@@ -86,6 +90,12 @@ fn read_file_compressed(filename: &Path) -> FileData {
                         Ok(a) => a,
                         _ => break,
                     };
+                    if (min_height > f) {
+                        min_height = f;
+                    }
+                    if (max_height < f) {
+                        max_height = f;
+                    }
                     floats.push(f);
                     if f == no_data {
                         panic!("James said there's be none")
@@ -100,6 +110,8 @@ fn read_file_compressed(filename: &Path) -> FileData {
         rows,
         cols,
         points: floats,
+        min_height,
+        max_height,
     };
     //let mut dest = File::create(cache_path).expect("Must be path");
     //bincode::serialize_into(dest, &data);
@@ -113,6 +125,8 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
     let mut rows: u64 = 0;
     let mut cellsize: f64 = 0.0;
     let mut no_data: f32 = -9999.0;
+    let mut max_height: f32 = -::std::f32::INFINITY;
+    let mut min_height: f32 = ::std::f32::INFINITY;
     let mut floats = Vec::new();
     for path_maybe in folder {
         if let Ok(dir_entry) = path_maybe {
@@ -163,6 +177,12 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
                             Ok(a) => a,
                             _ => break,
                         };
+                        if (min_height > f) {
+                            min_height = f;
+                        }
+                        if (max_height < f) {
+                            max_height = f;
+                        }
                         floats.push(f);
                         if f == no_data {
                             panic!("James said there's be none")
@@ -178,5 +198,7 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
         rows,
         cols,
         points: floats,
+        min_height,
+        max_height,
     }
 }

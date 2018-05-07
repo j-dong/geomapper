@@ -34,6 +34,7 @@ use vulkano_win::VkSurfaceBuild;
 
 use vulkano::buffer::BufferUsage;
 use vulkano::buffer::CpuAccessibleBuffer;
+use vulkano::buffer::ImmutableBuffer;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::command_buffer::DynamicState;
 use vulkano::device::Device;
@@ -109,7 +110,125 @@ impl Iterator for DummyIter {
 
 impl ExactSizeIterator for DummyIter { }
 
+#[derive(Debug, Clone)]
+struct Vertex {
+    position: [f32; 2],
+}
+impl_vertex!(Vertex, position);
+
+#[derive(Debug, Copy, Clone)]
+struct Grid {
+    row: u32,
+    col: u32,
+    rows: u32,
+    cols: u32,
+}
+
+impl Grid {
+    fn new(rows: u32, cols: u32) -> Grid {
+        Grid {
+            row: 0,
+            col: 0,
+            rows,
+            cols,
+        }
+    }
+}
+
+impl Iterator for Grid {
+    type Item = Vertex;
+
+    fn next(&mut self) -> Option<Vertex> {
+        let res = Vertex {
+            position: [self.col as f32 / self.cols as f32, self.row as f32 / self.rows as f32],
+        };
+        self.col += 1;
+        if self.col >= self.cols {
+            if self.row < self.rows {
+                self.row += 1;
+                self.col = 0;
+            } else {
+                self.col = self.cols;
+                return None;
+            }
+        }
+        Some(res)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let consumed = self.col as usize + self.row as usize * self.cols as usize;
+        let size = self.rows as usize * self.cols as usize;
+        (size - consumed, Some(size - consumed))
+    }
+}
+
+impl ExactSizeIterator for Grid { }
+
+#[derive(Debug, Copy, Clone)]
+struct GridIndex {
+    row: u32,
+    col: u32,
+    rows: u32,
+    cols: u32,
+    // holds which triangle is being drawn on the quad
+    quad_index: u8,
+}
+
+impl Grid {
+    const INDICES_PER_QUAD: u8 = 6;
+
+    fn make_index(&self) -> GridIndex {
+        GridIndex {
+            row: 0,
+            col: 0,
+            rows: self.rows - 1,
+            cols: self.cols - 1,
+            quad_index: 0,
+        }
+    }
+}
+
+impl Iterator for GridIndex {
+    type Item = u32;
+
+    fn next(&mut self) -> Option<u32> {
+        let coord = match self.quad_index {
+            0     => (self.row    , self.col    ),
+            1 | 3 => (self.row    , self.col + 1),
+            2 | 4 => (self.row + 1, self.col    ),
+            5     => (self.row + 1, self.col + 1),
+            _     => panic!("Invalid quad_index (>5)"),
+        };
+        let res = coord.0 * (self.cols + 1) + coord.1;
+        self.quad_index += 1;
+        if self.quad_index == Grid::INDICES_PER_QUAD {
+            self.quad_index = 0;
+            self.col += 1;
+            if self.col >= self.cols {
+                if self.row < self.rows {
+                    self.row += 1;
+                    self.col = 0;
+                } else {
+                    self.col = self.cols;
+                    return None;
+                }
+            }
+        }
+        Some(res)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let consumed = (self.col as usize + self.row as usize * self.cols as usize) *
+            Grid::INDICES_PER_QUAD as usize + self.quad_index as usize;
+        let size = self.rows as usize * self.cols as usize * Grid::INDICES_PER_QUAD as usize;
+        (size - consumed, Some(size - consumed))
+    }
+}
+
+impl ExactSizeIterator for GridIndex { }
+
 fn main() {
+
     // The first step of any vulkan program is to create an instance.
     let instance = {
         // When we create an instance, we have to pass a list of extensions that we want to enable.
@@ -265,31 +384,28 @@ fn main() {
         ).expect("failed to create swapchain")
     };
 
-    // We now create a buffer that will store the shape of our triangle.
-    let vertex_buffer = {
-        #[derive(Debug, Clone)]
-        struct Vertex {
-            position: [f32; 2],
-        }
-        impl_vertex!(Vertex, position);
+    let terrain_data = parser::read_file(std::path::Path::new("res/n31w098.zip"), true);
 
-        CpuAccessibleBuffer::from_iter(
-            device.clone(),
-            BufferUsage::all(),
-            [
-                Vertex {
-                    position: [-0.5, -0.25],
-                },
-                Vertex {
-                    position: [0.0, 0.5],
-                },
-                Vertex {
-                    position: [0.25, -0.1],
-                },
-            ].iter()
-                .cloned(),
+    let grid = Grid::new(256, 256);
+
+    // We now create a buffer that will store the shape of our triangle.
+    let (vertex_buffer, vbo_future) = {
+        ImmutableBuffer::from_iter(
+            grid,
+            BufferUsage::vertex_buffer(),
+            queue.clone(),
         ).expect("failed to create buffer")
     };
+    // We now create a buffer that will store the shape of our triangle.
+    let (index_buffer, ibo_future) = {
+        ImmutableBuffer::from_iter(
+            grid.make_index(),
+            BufferUsage::index_buffer(),
+            queue.clone(),
+        ).expect("failed to create buffer")
+    };
+    vbo_future.join(ibo_future).then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+
 
     // The next step is to create the shaders.
     //
@@ -415,16 +531,11 @@ void main() {
     // Initialization is finally finished!
 
     // create image
-    let im_width = 512u32;
-    let im_height = 512u32;
-    let (image, image_created) = ImmutableImage::from_iter(DummyIter {
-        x: 0,
-        y: 0,
-        width: im_width as usize,
-        height: im_height as usize,
-        block_size: 16,
-        period: 8,
-    }, Dimensions::Dim2d { width: im_width, height: im_height },
+    let (image, image_created) = ImmutableImage::from_iter(terrain_data.points.iter().map(|&x| {
+        (x - terrain_data.min_height) / (terrain_data.max_height - terrain_data.min_height)}),
+                                                           Dimensions::Dim2d {
+        width: terrain_data.cols as u32,
+        height: terrain_data.rows as u32 },
     format::R32Sfloat, queue.clone()).unwrap();
 
     // allocate descriptor set for sampler
@@ -456,6 +567,8 @@ void main() {
     let mut push_constants = fs::ty::PushConstants {
         color: [1.0, 0.0, 0.0, 1.0],
     };
+    let mut previous_second = Instant::now();
+    let mut fps_counter = 0;
 
     loop {
         // It is important to call this function from time to time, otherwise resources will keep
@@ -467,6 +580,13 @@ void main() {
         let elapsed = previous_time.elapsed();
         push_constants.color[0] = (push_constants.color[0] + elapsed.subsec_nanos() as f32 / 1000000000.0).fract();
         previous_time = Instant::now();
+        fps_counter += 1;
+        if previous_second.elapsed().as_secs() >= 1 {
+            let new_title = format!("FPS: {}", fps_counter);
+            window.window().set_title(&new_title);
+            fps_counter = 0;
+            previous_second = Instant::now();
+        }
 
         // If the swapchain needs to be recreated, recreate it
         if recreate_swapchain {
@@ -556,7 +676,7 @@ void main() {
             //
             // The last two parameters contain the list of resources to pass to the shaders.
             // Since we used an `EmptyPipeline` object, the objects have to be `()`.
-            .draw(pipeline.clone(),
+            .draw_indexed(pipeline.clone(),
                   DynamicState {
                       line_width: None,
                       // TODO: Find a way to do this without having to dynamically allocate a Vec every frame.
@@ -567,7 +687,7 @@ void main() {
                       }]),
                       scissors: None,
                   },
-                  vertex_buffer.clone(), desc_set.clone(), push_constants)
+                  vertex_buffer.clone(), index_buffer.clone(), desc_set.clone(), push_constants)
             .unwrap()
 
             // We leave the render pass by calling `draw_end`. Note that if we had multiple
