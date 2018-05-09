@@ -404,7 +404,19 @@ fn main() {
             queue.clone(),
         ).expect("failed to create buffer")
     };
-    vbo_future.join(ibo_future).then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+    // We now create a buffer that will store the shape of our triangle.
+    let (uniform_buffer, ubo_future) = {
+        ImmutableBuffer::from_iter(
+            [1.0f32, 0.0, 0.0, 0.0,
+                   0.0,    1.5, 0.0, 0.0,
+                   0.0,    0.0, 1.0, 0.0,
+                   0.0,    0.0, 0.0, 0.0,].iter().cloned(),
+            BufferUsage::uniform_buffer(),
+            queue.clone(),
+        ).expect("failed to create buffer")
+    };
+    vbo_future.join(ibo_future).join(ubo_future).then_signal_fence_and_flush().unwrap().wait(None)
+                                         .unwrap();
 
 
     // The next step is to create the shaders.
@@ -425,9 +437,13 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec2 vs_pos;
 
+layout(set = 0, binding = 1) uniform ProjMatrix {
+    mat4 proj;
+} proj_matrix;
+
 void main() {
     vs_pos = position;
-    gl_Position = vec4(position, 0.0, 1.0);
+    gl_Position = proj_matrix.proj * vec4(position, 0.0, 1.0);
 }
 "]
         struct Dummy;
@@ -440,7 +456,7 @@ void main() {
 #version 450
 layout(location = 0) out vec4 f_color;
 
-layout(binding = 0) uniform sampler2D tex;
+layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(push_constant) uniform PushConstants {
     vec4 color;
@@ -542,6 +558,7 @@ void main() {
     let desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
         .add_sampled_image(image.clone(),
             Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
+        .add_buffer(uniform_buffer.clone()).unwrap()
         .build().unwrap());
 
     // In some situations, the swapchain will become invalid by itself. This includes for example
