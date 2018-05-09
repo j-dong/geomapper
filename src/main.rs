@@ -410,7 +410,7 @@ fn main() {
             [1.0f32, 0.0, 0.0, 0.0,
                    0.0,    1.5, 0.0, 0.0,
                    0.0,    0.0, 1.0, 0.0,
-                   0.0,    0.0, 0.0, 0.0,].iter().cloned(),
+                   0.0,    0.0, 0.0, 1.0,].iter().cloned(),
             BufferUsage::uniform_buffer(),
             queue.clone(),
         ).expect("failed to create buffer")
