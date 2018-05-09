@@ -433,6 +433,7 @@ layout(location = 0) in vec2 position;
 
 layout(push_constant) uniform PushConstants {
     vec4 color;
+    mat4 view;
 } push_constants;
 
 layout(location = 0) out vec2 vs_pos;
@@ -443,7 +444,7 @@ layout(set = 0, binding = 1) uniform ProjMatrix {
 
 void main() {
     vs_pos = position;
-    gl_Position = proj_matrix.proj * vec4(position, 0.0, 1.0);
+    gl_Position = proj_matrix.proj * push_constants.view * vec4(position, 0.0, 1.0);
 }
 "]
         struct Dummy;
@@ -460,6 +461,7 @@ layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(push_constant) uniform PushConstants {
     vec4 color;
+    mat4 view;
 } push_constants;
 
 layout(location = 0) in vec2 vs_pos;
@@ -583,6 +585,10 @@ void main() {
     let mut previous_time = Instant::now();
     let mut push_constants = fs::ty::PushConstants {
         color: [1.0, 0.0, 0.0, 1.0],
+        view: [[1.0, 0.0, 0.0, 0.0],
+               [0.0, 1.0, 0.0, 0.0],
+               [0.0, 0.0, 1.0, 0.0],
+               [0.0, 0.0, 0.0, 1.0]],
     };
     let mut previous_second = Instant::now();
     let mut fps_counter = 0;
@@ -596,6 +602,20 @@ void main() {
 
         let elapsed = previous_time.elapsed();
         push_constants.color[0] = (push_constants.color[0] + elapsed.subsec_nanos() as f32 / 1000000000.0).fract();
+        {
+            // rotate view
+            let m00 = push_constants.view[0][0];
+            let m01 = push_constants.view[0][1];
+            let m10 = push_constants.view[1][0];
+            let m11 = push_constants.view[1][1];
+            let theta = elapsed.subsec_nanos() as f32 / 1000000000.0f32;
+            let cos = f32::cos(theta);
+            let sin = f32::sin(theta);
+            push_constants.view[0][0] = cos * m00 + sin * m10;
+            push_constants.view[0][1] = cos * m01 + sin * m11;
+            push_constants.view[1][0] = cos * m10 - sin * m00;
+            push_constants.view[1][1] = cos * m11 - sin * m01;
+        }
         previous_time = Instant::now();
         fps_counter += 1;
         if previous_second.elapsed().as_secs() >= 1 {
