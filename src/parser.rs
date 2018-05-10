@@ -1,13 +1,13 @@
-extern crate byteorder;
 extern crate bincode;
+extern crate byteorder;
 
 
-use std::path::Path;
-use std::fs::File;
-use std::fs;
-use zip::ZipArchive;
-use std::io::prelude::*;
 use self::byteorder::{LittleEndian, ReadBytesExt};
+use std::fs;
+use std::fs::File;
+use std::io::prelude::*;
+use std::path::Path;
+use zip::ZipArchive;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileData {
@@ -16,6 +16,9 @@ pub struct FileData {
     pub points: Vec<f32>,
     pub min_height: f32,
     pub max_height: f32,
+    pub cellsize: f64,
+    pub x_lower_left_corner: f64,
+    pub y_lower_left_corner: f64,
 }
 
 pub fn read_file(filename: &Path, compressed: bool) -> FileData {
@@ -26,19 +29,14 @@ pub fn read_file(filename: &Path, compressed: bool) -> FileData {
 }
 
 fn read_file_compressed(filename: &Path) -> FileData {
-    /*
-    let cache_path = Path::new("res/cached_map.bitbin");
-    match File::open(cache_path){
-        Ok(cache_file) => return bincode::deserialize_from(cache_file).expect("Should work"),
-        _ => { },
-    };
-*/
     let mut archive;
     let compressed = File::open(filename).expect("File won't open");
     archive = ZipArchive::new(compressed).expect("Zip won't unzip");
     let mut cols: u64 = 0;
     let mut rows: u64 = 0;
     let mut cellsize: f64 = 0.0;
+    let mut xllcorner: f64 = 0.0;
+    let mut yllcorner: f64 = 0.0;
     let mut no_data: f32 = -9999.0;
     let mut max_height: f32 = -::std::f32::INFINITY;
     let mut min_height: f32 = ::std::f32::INFINITY;
@@ -71,6 +69,12 @@ fn read_file_compressed(filename: &Path) -> FileData {
                         Some("cellsize") => {
                             cellsize = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
                         }
+                        Some("xllcorner") => {
+                            xllcorner = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
+                        }
+                        Some("yllcorner") => {
+                            yllcorner = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
+                        }
                         Some("NODATA_value") => {
                             no_data = components
                                 .next()
@@ -90,10 +94,10 @@ fn read_file_compressed(filename: &Path) -> FileData {
                         Ok(a) => a,
                         _ => break,
                     };
-                    if (min_height > f) {
+                    if min_height > f {
                         min_height = f;
                     }
-                    if (max_height < f) {
+                    if max_height < f {
                         max_height = f;
                     }
                     floats.push(f);
@@ -112,6 +116,9 @@ fn read_file_compressed(filename: &Path) -> FileData {
         points: floats,
         min_height,
         max_height,
+        cellsize,
+        x_lower_left_corner: xllcorner,
+        y_lower_left_corner: yllcorner,
     };
     //let mut dest = File::create(cache_path).expect("Must be path");
     //bincode::serialize_into(dest, &data);
@@ -124,6 +131,8 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
     let mut cols: u64 = 0;
     let mut rows: u64 = 0;
     let mut cellsize: f64 = 0.0;
+    let mut xllcorner: f64 = 0.0;
+    let mut yllcorner: f64 = 0.0;
     let mut no_data: f32 = -9999.0;
     let mut max_height: f32 = -::std::f32::INFINITY;
     let mut min_height: f32 = ::std::f32::INFINITY;
@@ -158,6 +167,12 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
                             Some("cellsize") => {
                                 cellsize = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
                             }
+                            Some("xllcorner") => {
+                                xllcorner = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
+                            }
+                            Some("yllcorner") => {
+                                yllcorner = components.next().unwrap_or("0.0").parse().unwrap_or(0.0);
+                            }
                             Some("NODATA_value") => {
                                 no_data = components
                                     .next()
@@ -177,10 +192,10 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
                             Ok(a) => a,
                             _ => break,
                         };
-                        if (min_height > f) {
+                        if min_height > f {
                             min_height = f;
                         }
-                        if (max_height < f) {
+                        if max_height < f {
                             max_height = f;
                         }
                         floats.push(f);
@@ -200,5 +215,8 @@ fn read_file_uncompressed(folder: &Path) -> FileData {
         points: floats,
         min_height,
         max_height,
+        cellsize,
+        x_lower_left_corner: xllcorner,
+        y_lower_left_corner: yllcorner,
     }
 }

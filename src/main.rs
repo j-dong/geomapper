@@ -10,6 +10,9 @@
 // For the purpose of this example all unused code is allowed.
 #![allow(dead_code)]
 
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
 // The `vulkano` crate is the main crate that you must use to use Vulkan.
 #[macro_use]
 extern crate vulkano;
@@ -17,48 +20,41 @@ extern crate vulkano;
 // in this example.
 #[macro_use]
 extern crate vulkano_shader_derive;
-// However the Vulkan library doesn't provide any functionality to create and handle windows, as
-// this would be out of scope. In order to open a window, we are going to use the `winit` crate.
-extern crate winit;
 // The `vulkano_win` crate is the link between `vulkano` and `winit`. Vulkano doesn't know about
 // winit, and winit doesn't know about vulkano, so import a crate that will provide a link between
 // the two.
 extern crate vulkano_win;
+// However the Vulkan library doesn't provide any functionality to create and handle windows, as
+// this would be out of scope. In order to open a window, we are going to use the `winit` crate.
+extern crate winit;
 extern crate zip;
 
-#[macro_use]
-extern crate serde_derive;
-extern crate serde;
-
-use vulkano_win::VkSurfaceBuild;
-
+use std::mem;
+use std::sync::Arc;
+use std::time::Instant;
 use vulkano::buffer::BufferUsage;
-use vulkano::buffer::CpuAccessibleBuffer;
 use vulkano::buffer::ImmutableBuffer;
 use vulkano::command_buffer::AutoCommandBufferBuilder;
 use vulkano::command_buffer::DynamicState;
+use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
 use vulkano::device::Device;
+use vulkano::format;
 use vulkano::framebuffer::Framebuffer;
 use vulkano::framebuffer::Subpass;
+use vulkano::image::Dimensions;
+use vulkano::image::ImmutableImage;
 use vulkano::instance::Instance;
 use vulkano::pipeline::GraphicsPipeline;
 use vulkano::pipeline::viewport::Viewport;
+use vulkano::sampler::Sampler;
 use vulkano::swapchain;
+use vulkano::swapchain::AcquireError;
 use vulkano::swapchain::PresentMode;
 use vulkano::swapchain::SurfaceTransform;
 use vulkano::swapchain::Swapchain;
-use vulkano::swapchain::AcquireError;
 use vulkano::swapchain::SwapchainCreationError;
 use vulkano::sync::GpuFuture;
-use vulkano::image::ImmutableImage;
-use vulkano::image::Dimensions;
-use vulkano::descriptor::descriptor_set::PersistentDescriptorSet;
-use vulkano::sampler::Sampler;
-use vulkano::format;
-
-use std::sync::Arc;
-use std::mem;
-use std::time::Instant;
+use vulkano_win::VkSurfaceBuild;
 
 mod parser;
 
