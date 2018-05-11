@@ -29,6 +29,8 @@ extern crate vulkano_win;
 extern crate winit;
 extern crate zip;
 
+extern crate cgmath;
+
 use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
@@ -111,6 +113,12 @@ struct Vertex {
     position: [f32; 2],
 }
 impl_vertex!(Vertex, position);
+
+#[derive(Debug, Clone)]
+struct Vertex3D {
+    position: [f32; 3],
+}
+impl_vertex!(Vertex3D, position);
 
 #[derive(Debug, Copy, Clone)]
 struct Grid {
@@ -276,6 +284,9 @@ fn main() {
         .build_vk_surface(&events_loop, instance.clone())
         .unwrap();
 
+    let new_title = format!("Loading terrain data...");
+    window.window().set_title(&new_title);
+
     // Get the dimensions of the viewport. These variables need to be mutable since the viewport
     // can change size.
     let mut dimensions = {
@@ -380,14 +391,37 @@ fn main() {
         ).expect("failed to create swapchain")
     };
 
+    println!("Parsing data");
     let terrain_data = parser::read_file(std::path::Path::new("res/n31w098.zip"), true);
+    println!("Done parsing data");
 
     let grid = Grid::new(256, 256);
+
+    fn sample_terrain(x: f32, y: f32, terrain_data: &parser::FileData) -> f32 {
+        let tx = (x * terrain_data.cols as f32) as i64;
+        let ty = (y * terrain_data.rows as f32) as i64;
+        let clamped_tx = if tx < 0 { 0 } else if tx >= terrain_data.cols as i64 { terrain_data
+            .cols as usize - 1
+        } else { tx as usize };
+        let clamped_ty = if ty < 0 { 0 } else if ty >= terrain_data.rows as i64 { terrain_data
+            .rows as usize - 1
+        } else { ty as usize };
+        let data: f32 = terrain_data.points[clamped_ty * terrain_data.cols as usize + clamped_tx];
+        (data - terrain_data.min_height) / (terrain_data.max_height - terrain_data.min_height)
+    }
+
+    let mut depth_buffer = vulkano::image::AttachmentImage::transient(device.clone(), dimensions,
+                                                                      vulkano::format::D16Unorm)
+        .unwrap();
 
     // We now create a buffer that will store the shape of our triangle.
     let (vertex_buffer, vbo_future) = {
         ImmutableBuffer::from_iter(
-            grid,
+            grid.map(|vx| { Vertex3D { position: [vx.position[0], sample_terrain(vx.position[0],
+                                                                                 vx.position[1],
+                                                                                 &terrain_data)
+                * 0.1, vx
+                .position[1]], } }),
             BufferUsage::vertex_buffer(),
             queue.clone(),
         ).expect("failed to create buffer")
@@ -401,12 +435,15 @@ fn main() {
         ).expect("failed to create buffer")
     };
     // We now create a buffer that will store the shape of our triangle.
-    let (uniform_buffer, ubo_future) = {
+    // projection matrix
+    let (mut uniform_buffer, ubo_future) = {
         ImmutableBuffer::from_iter(
-            [1.0f32, 0.0, 0.0, 0.0,
-                   0.0,    1.5, 0.0, 0.0,
-                   0.0,    0.0, 1.0, 0.0,
-                   0.0,    0.0, 0.0, 1.0,].iter().cloned(),
+            ((cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_4),
+            dimensions[0] as f32 / dimensions[1] as f32,
+            0.001, 1000.0) * cgmath::Matrix4::from_nonuniform_scale(1.0, -1.0, 1.0)).as_ref() as
+                &[f32; 16])
+                .iter()
+                .cloned(),
             BufferUsage::uniform_buffer(),
             queue.clone(),
         ).expect("failed to create buffer")
@@ -425,10 +462,11 @@ fn main() {
         #[ty = "vertex"]
         #[src = "
 #version 450
-layout(location = 0) in vec2 position;
+layout(location = 0) in vec3 position;
+
+layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(push_constant) uniform PushConstants {
-    vec4 color;
     mat4 view;
 } push_constants;
 
@@ -439,8 +477,8 @@ layout(set = 0, binding = 1) uniform ProjMatrix {
 } proj_matrix;
 
 void main() {
-    vs_pos = position;
-    gl_Position = proj_matrix.proj * push_constants.view * vec4(position, 0.0, 1.0);
+    vs_pos = position.xz;
+    gl_Position = proj_matrix.proj * push_constants.view * vec4(position, 1.0);
 }
 "]
         struct Dummy;
@@ -456,14 +494,13 @@ layout(location = 0) out vec4 f_color;
 layout(set = 0, binding = 0) uniform sampler2D tex;
 
 layout(push_constant) uniform PushConstants {
-    vec4 color;
     mat4 view;
 } push_constants;
 
 layout(location = 0) in vec2 vs_pos;
 
 void main() {
-    f_color = push_constants.color + vec4(0.0, texture(tex, vs_pos).r, 0.0, 0.0);
+    f_color = vec4(texture(tex, vs_pos).r, texture(tex, vs_pos).r, texture(tex, vs_pos).r, 0.0);
 }
 "]
         struct Dummy;
@@ -498,13 +535,19 @@ void main() {
                 format: swapchain.format(),
                 // TODO:
                 samples: 1,
+            },
+            depth: {
+                load: Clear,
+                store: DontCare,
+                format: vulkano::format::Format::D16Unorm,
+                samples: 1,
             }
         },
         pass: {
             // We use the attachment named `color` as the one and only color attachment.
             color: [color],
             // No depth-stencil attachment is indicated with empty brackets.
-            depth_stencil: {}
+            depth_stencil: {depth}
         }
     ).unwrap(),
     );
@@ -527,6 +570,7 @@ void main() {
         .viewports_dynamic_scissors_irrelevant(1)
         // See `vertex_shader`.
         .fragment_shader(fs.main_entry_point(), ())
+        .depth_stencil_simple_depth()
         // We have to indicate which subpass of which render pass this pipeline is going to be used
         // in. The pipeline will only be usable from this particular subpass.
         .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
@@ -545,7 +589,19 @@ void main() {
     // Initialization is finally finished!
 
     // create image
-    let (image, image_created) = ImmutableImage::from_iter(terrain_data.points.iter().map(|&x| {
+    let (image, image_created) =
+    /*
+        ImmutableImage::from_iter(DummyIter {
+            x: 0, y: 0,
+            width: 1024, height: 1024,
+            block_size: 16,
+            period: 16,
+        }, Dimensions::Dim2d {
+            width: 1024,
+            height: 1024,
+        },
+    */
+        ImmutableImage::from_iter(terrain_data.points.iter().map(|&x| {
         (x - terrain_data.min_height) / (terrain_data.max_height - terrain_data.min_height)}),
                                                            Dimensions::Dim2d {
         width: terrain_data.cols as u32,
@@ -553,7 +609,7 @@ void main() {
     format::R32Sfloat, queue.clone()).unwrap();
 
     // allocate descriptor set for sampler
-    let desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
+    let mut desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
         .add_sampled_image(image.clone(),
             Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
         .add_buffer(uniform_buffer.clone()).unwrap()
@@ -580,7 +636,6 @@ void main() {
 
     let mut previous_time = Instant::now();
     let mut push_constants = fs::ty::PushConstants {
-        color: [1.0, 0.0, 0.0, 1.0],
         view: [[1.0, 0.0, 0.0, 0.0],
                [0.0, 1.0, 0.0, 0.0],
                [0.0, 0.0, 1.0, 0.0],
@@ -588,6 +643,25 @@ void main() {
     };
     let mut previous_second = Instant::now();
     let mut fps_counter = 0;
+    let mut right_mouse_pressed = false;
+    let mut left_mouse_pressed = false;
+    let mut mouse_x = 0.0;
+    let mut mouse_y = 0.0;
+    let mut zoom = 1.0;
+
+    let mut camera_pos = cgmath::Point3::new(0.0, 0.08, 1.5);
+    let mut w_down = false;
+    let mut s_down = false;
+    let mut a_down = false;
+    let mut d_down = false;
+
+    fn from_spherical(theta: f32, phi: f32) -> cgmath::Vector3<f32> {
+        cgmath::Vector3::new(
+            theta.cos() * phi.cos(),
+            phi.sin(),
+            theta.sin() * phi.cos(),
+        )
+    }
 
     loop {
         // It is important to call this function from time to time, otherwise resources will keep
@@ -596,26 +670,50 @@ void main() {
         // already processed, and frees the resources that are no longer needed.
         previous_frame_end.cleanup_finished();
 
-        let elapsed = previous_time.elapsed();
-        push_constants.color[0] = (push_constants.color[0] + elapsed.subsec_nanos() as f32 / 1000000000.0).fract();
+        let theta = mouse_x * std::f32::consts::PI * 2.0;
+        let phi   = -mouse_y * std::f32::consts::FRAC_PI_2;
+
+        let elapsed_dur = previous_time.elapsed();
+        let delta = (elapsed_dur.subsec_nanos() as f64 / 1000000000.0) as f32;
+
+        let looking_at_direction = from_spherical(theta, phi);
+        let looking_at_right = from_spherical(theta + std::f32::consts::FRAC_PI_2, 0.0);
+        if w_down { camera_pos += looking_at_direction * delta; }
+        if s_down { camera_pos -= looking_at_direction * delta; }
+        if d_down { camera_pos += looking_at_right * delta; }
+        if a_down { camera_pos -= looking_at_right * delta; }
+
         {
-            // rotate view
-            let m00 = push_constants.view[0][0];
-            let m01 = push_constants.view[0][1];
-            let m10 = push_constants.view[1][0];
-            let m11 = push_constants.view[1][1];
-            let theta = elapsed.subsec_nanos() as f32 / 1000000000.0f32;
-            let cos = f32::cos(theta);
-            let sin = f32::sin(theta);
-            push_constants.view[0][0] = cos * m00 + sin * m10;
-            push_constants.view[0][1] = cos * m01 + sin * m11;
-            push_constants.view[1][0] = cos * m10 - sin * m00;
-            push_constants.view[1][1] = cos * m11 - sin * m01;
+            //better view mat
+            let dir = from_spherical(theta, phi);
+            //println!("Center: {:?}", center);
+            let up = cgmath::Vector3::new(0.0, 1.0, 0.0);
+            let eye = camera_pos;
+            let world_mat = cgmath::Matrix4::look_at_dir(eye, dir, up);
+            push_constants.view[0][0] = world_mat.x.x;
+            push_constants.view[0][1] = world_mat.x.y;
+            push_constants.view[0][2] = world_mat.x.z;
+            push_constants.view[0][3] = world_mat.x.w;
+
+            push_constants.view[1][0] = world_mat.y.x;
+            push_constants.view[1][1] = world_mat.y.y;
+            push_constants.view[1][2] = world_mat.y.z;
+            push_constants.view[1][3] = world_mat.y.w;
+
+            push_constants.view[2][0] = world_mat.z.x;
+            push_constants.view[2][1] = world_mat.z.y;
+            push_constants.view[2][2] = world_mat.z.z;
+            push_constants.view[2][3] = world_mat.z.w;
+
+            push_constants.view[3][0] = world_mat.w.x;
+            push_constants.view[3][1] = world_mat.w.y;
+            push_constants.view[3][2] = world_mat.w.z;
+            push_constants.view[3][3] = world_mat.w.w;
         }
         previous_time = Instant::now();
         fps_counter += 1;
         if previous_second.elapsed().as_secs() >= 1 {
-            let new_title = format!("FPS: {}", fps_counter);
+            let new_title = format!("Austin's terrain! (FPS: {})", fps_counter);
             window.window().set_title(&new_title);
             fps_counter = 0;
             previous_second = Instant::now();
@@ -642,6 +740,29 @@ void main() {
             mem::replace(&mut swapchain, new_swapchain);
             mem::replace(&mut images, new_images);
 
+            let new_depth_buffer = vulkano::image::attachment::AttachmentImage::transient(device.clone(), dimensions, vulkano::format::D16Unorm).unwrap();
+            std::mem::replace(&mut depth_buffer, new_depth_buffer);
+
+            let (new_ubo, new_ubo_future) = ImmutableBuffer::from_iter(
+                ((cgmath::perspective(cgmath::Rad(std::f32::consts::FRAC_PI_4),
+                                      dimensions[0] as f32 / dimensions[1] as f32,
+                                      0.001, 1000.0) * cgmath::Matrix4::from_nonuniform_scale(1.0, -1.0, 1.0)).as_ref() as
+                    &[f32; 16])
+                    .iter()
+                    .cloned(),
+                BufferUsage::uniform_buffer(),
+                queue.clone(),
+            ).expect("failed to create buffer");
+            new_ubo_future.then_signal_fence_and_flush().unwrap().wait(None).unwrap();
+            mem::replace(&mut uniform_buffer, new_ubo);
+
+            let new_desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
+                .add_sampled_image(image.clone(),
+                                   Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
+                .add_buffer(uniform_buffer.clone()).unwrap()
+                .build().unwrap());
+            mem::replace(&mut desc_set, new_desc_set);
+
             framebuffers = None;
 
             recreate_swapchain = false;
@@ -656,8 +777,8 @@ void main() {
                     .map(|image| {
                         Arc::new(
                             Framebuffer::start(render_pass.clone())
-                                .add(image.clone())
-                                .unwrap()
+                                .add(image.clone()).unwrap()
+                                .add(depth_buffer.clone()).unwrap()
                                 .build()
                                 .unwrap(),
                         )
@@ -702,7 +823,7 @@ void main() {
             // is similar to the list of attachments when building the framebuffers, except that
             // only the attachments that use `load: Clear` appear in the list.
             .begin_render_pass(framebuffers.as_ref().unwrap()[image_num].clone(), false,
-                               vec![[0.0, 0.0, 1.0, 1.0].into()])
+                               vec![[0.0, 0.0, 1.0, 1.0].into(), 1f32.into()])
             .unwrap()
 
             // We are now inside the first subpass of the render pass. We add a draw command.
@@ -768,14 +889,75 @@ void main() {
         // it.
         let mut done = false;
         events_loop.poll_events(|ev| match ev {
+            // on window close event
             winit::Event::WindowEvent {
                 event: winit::WindowEvent::Closed,
                 ..
             } => done = true,
+            // on window resize event
             winit::Event::WindowEvent {
                 event: winit::WindowEvent::Resized(_, _),
                 ..
             } => recreate_swapchain = true,
+            // whenever the mouse clicks
+            winit::Event::WindowEvent {
+                event: winit::WindowEvent::MouseInput{ state, button, .. },
+                ..
+            } => {
+                left_mouse_pressed = match button {
+                    winit::MouseButton::Left => match state {
+                        winit::ElementState::Pressed => true,
+                        winit::ElementState::Released => false,
+                    },
+                    _ => left_mouse_pressed,
+                };
+                right_mouse_pressed = match button {
+                    winit::MouseButton::Right => match state {
+                        winit::ElementState::Pressed => true,
+                        winit::ElementState::Released => false,
+                    },
+                    _ => left_mouse_pressed,
+                };
+            },
+            winit::Event::WindowEvent {
+                event: winit::WindowEvent::KeyboardInput { input, .. },
+                ..
+            } => {
+                let state = input.state;
+                match input.virtual_keycode {
+                    Some(winit::VirtualKeyCode::W) => {
+                        w_down = state == winit::ElementState::Pressed;
+                    },
+                    Some(winit::VirtualKeyCode::S) => {
+                        s_down = state == winit::ElementState::Pressed;
+                    },
+                    Some(winit::VirtualKeyCode::D) => {
+                        d_down = state == winit::ElementState::Pressed;
+                    },
+                    Some(winit::VirtualKeyCode::A) => {
+                        a_down = state == winit::ElementState::Pressed;
+                    },
+                    _ => { },
+                }
+            },
+            //whenever the mouse moves (device persepctive, not OS)
+            winit::Event::DeviceEvent {
+                event: winit::DeviceEvent::MouseMotion{delta},
+                ..
+            } => {
+                let x = delta.0;
+                let y = delta.1;
+                if left_mouse_pressed {
+                    mouse_x = (mouse_x + x as f32 / 1_000.0).fract();
+                    mouse_y += y as f32 / 1_000.0;
+                    if mouse_y < -1.0 { mouse_y = -1.0; }
+                    if mouse_y >  1.0 { mouse_y =  1.0; }
+                    println!("Mouse x: {}, mouse y: {}", mouse_x, mouse_y);
+                }
+                if right_mouse_pressed {
+                    zoom += ((x * x + y * y) / 1_000_000.0) as f32;
+                }
+            },
             _ => (),
         });
         if done {
