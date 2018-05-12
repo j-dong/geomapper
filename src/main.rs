@@ -682,7 +682,7 @@ void main() {
     let mut mouse_y = 0.0;
     let mut zoom = 1.0;
 
-    let mut camera_pos = cgmath::Point3::new(0.0, 0.08, 1.5);
+    let mut camera_pos = cgmath::Point3::new(0.0, 0.8, 1.5);
     let mut w_down = false;
     let mut s_down = false;
     let mut a_down = false;
