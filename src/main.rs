@@ -172,7 +172,7 @@ struct GridIndex {
 }
 
 impl Grid {
-    const INDICES_PER_QUAD: u8 = 6;
+    const INDICES_PER_QUAD: u8 = 4;
 
     fn make_index(&self) -> GridIndex {
         GridIndex {
@@ -190,11 +190,11 @@ impl Iterator for GridIndex {
 
     fn next(&mut self) -> Option<u32> {
         let coord = match self.quad_index {
-            0     => (self.row    , self.col    ),
-            1 | 3 => (self.row    , self.col + 1),
-            2 | 4 => (self.row + 1, self.col    ),
-            5     => (self.row + 1, self.col + 1),
-            _     => panic!("Invalid quad_index (>5)"),
+            0 => (self.row    , self.col    ),
+            1 => (self.row + 1, self.col    ),
+            2 => (self.row + 1, self.col + 1),
+            3 => (self.row    , self.col + 1),
+            _     => panic!("Invalid quad_index (>3)"),
         };
         let res = coord.0 * (self.cols + 1) + coord.1;
         self.quad_index += 1;
@@ -232,11 +232,20 @@ fn main() {
         // All the window-drawing functionalities are part of non-core extensions that we need
         // to enable manually. To do so, we ask the `vulkano_win` crate for the list of extensions
         // required to draw to a window.
-        let extensions = vulkano_win::required_extensions();
-
+        let extensions = vulkano::instance::InstanceExtensions {
+            ext_debug_report: true,
+            ..vulkano_win::required_extensions()
+        };
         // Now creating the instance.
-        Instance::new(None, &extensions, None).expect("failed to create Vulkan instance")
+        Instance::new(None, &extensions, None).expect("failed to \
+        create Vulkan \
+        instance")
     };
+
+    let _callback = vulkano::instance::debug::DebugCallback::errors_and_warnings(&instance,
+    |msg| {
+        println!("Debug callback: {:?}", msg.description);
+    }).ok();
 
     // We then choose which physical device to use.
     //
@@ -261,6 +270,7 @@ fn main() {
         physical.name(),
         physical.ty()
     );
+    println!("Features: {:#?}", physical.supported_features());
 
     // The objective of this example is to draw a triangle on a window. To do so, we first need to
     // create a surface that is wrapped in a window.
@@ -526,8 +536,79 @@ void main() {
         struct Dummy;
     }
 
-    let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
-    let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
+    mod tcs {
+        #[derive(VulkanoShader)]
+        #[ty = "tess_ctrl"]
+        #[src = "
+#version 450
+
+layout(vertices = 4) out;
+
+layout(location=0) in vec2 vs_pos_in[];
+layout(location=0) out vec2 vs_pos_out[4];
+
+void main() {
+    gl_TessLevelOuter[0] = 2.0;
+    gl_TessLevelOuter[1] = 2.0;
+    gl_TessLevelOuter[2] = 2.0;
+    gl_TessLevelOuter[3] = 2.0;
+    gl_TessLevelInner[0] = 2.0;
+    gl_TessLevelInner[1] = 2.0;
+
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    vs_pos_out[gl_InvocationID] = vs_pos_in[gl_InvocationID];
+}
+"]
+        struct Dummy;
+    }
+
+    mod tes {
+        #[derive(VulkanoShader)]
+        #[ty = "tess_eval"]
+        #[src = "
+#version 450
+
+layout(quads, equal_spacing, ccw) in;
+
+layout(location=0) in vec2 vs_pos_in[];
+layout(location=0) out vec2 vs_pos_out;
+
+//quad interpol
+vec4 interpolate(in vec4 v0, in vec4 v1, in vec4 v2, in vec4 v3)
+{
+ vec4 a = mix(v0, v1, gl_TessCoord.x);
+ vec4 b = mix(v3, v2, gl_TessCoord.x);
+ return mix(a, b, gl_TessCoord.y);
+}
+
+vec2 interpolate2(in vec2 v0, in vec2 v1, in vec2 v2, in vec2 v3)
+{
+ vec2 a = mix(v0, v1, gl_TessCoord.x);
+ vec2 b = mix(v3, v2, gl_TessCoord.x);
+ return mix(a, b, gl_TessCoord.y);
+}
+
+void main()
+{
+ gl_Position = interpolate(
+  gl_in[0].gl_Position,
+  gl_in[1].gl_Position,
+  gl_in[2].gl_Position,
+  gl_in[3].gl_Position);
+ vs_pos_out = interpolate2(
+  vs_pos_in[0],
+  vs_pos_in[1],
+  vs_pos_in[2],
+  vs_pos_in[3]);
+}
+"]
+        struct Dummy;
+    }
+
+    let vs = vs::Shader::load(device.clone()).expect("failed to create vertex shader module");
+    let fs = fs::Shader::load(device.clone()).expect("failed to create fragment shader module");
+    let tcs = tcs::Shader::load(device.clone()).expect("failed to create TCS");
+    let tes = tcs::Shader::load(device.clone()).expect("failed to create TES");
 
     // At this point, OpenGL initialization would be finished. However in Vulkan it is not. OpenGL
     // implicitely does a lot of computation whenever you draw. In Vulkan, you have to do all this
@@ -584,8 +665,9 @@ void main() {
         // which one. The `main` word of `main_entry_point` actually corresponds to the name of
         // the entry point.
         .vertex_shader(vs.main_entry_point(), ())
-        // The content of the vertex buffer describes a list of triangles.
-        .triangle_list()
+        // The content of the vertex buffer describes a list of patches.
+        .patch_list(4)
+        .tessellation_shaders(tcs.main_entry_point(), (), tes.main_entry_point(), ())
         // Use a resizable viewport set to draw over the entire window
         .viewports_dynamic_scissors_irrelevant(1)
         // See `vertex_shader`.
