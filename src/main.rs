@@ -31,6 +31,8 @@ extern crate zip;
 
 extern crate cgmath;
 
+extern crate image;
+
 use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
@@ -393,7 +395,8 @@ fn main() {
 
     println!("Parsing data");
     let terrain_data = parser::read_file(std::path::Path::new("res/n31w098.zip"), true);
-    println!("Done parsing data");
+    println!("Parsing image");
+
 
     let grid = Grid::new(256, 256);
 
@@ -407,7 +410,16 @@ fn main() {
             .rows as usize - 1
         } else { ty as usize };
         let data: f32 = terrain_data.points[clamped_ty * terrain_data.cols as usize + clamped_tx];
-        (data - terrain_data.min_height) / (terrain_data.max_height - terrain_data.min_height)
+
+        const EARTH_RADIUS_M: f64 = 6_378_100.0;
+        const RADIANS_PER_DEGREE: f64 = std::f64::consts::PI / 180.0;
+        let x_size = terrain_data.cols as f64 * terrain_data.cellsize * RADIANS_PER_DEGREE *
+            f64::cos(terrain_data.y_lower_left_corner as f64 * RADIANS_PER_DEGREE) * EARTH_RADIUS_M;
+        let y_size = terrain_data.rows as f64 * terrain_data.cellsize * RADIANS_PER_DEGREE * EARTH_RADIUS_M;
+        let scale_factor_x = 1.0 / x_size;
+        let scale_factor_y = 1.0 / y_size;
+        let scale_factor = f64::sqrt(scale_factor_x * scale_factor_y);
+        (data as f64 * scale_factor) as f32
     }
 
     let mut depth_buffer = vulkano::image::AttachmentImage::transient(device.clone(), dimensions,
@@ -420,7 +432,7 @@ fn main() {
             grid.map(|vx| { Vertex3D { position: [vx.position[0], sample_terrain(vx.position[0],
                                                                                  vx.position[1],
                                                                                  &terrain_data)
-                * 0.1, vx
+                , vx
                 .position[1]], } }),
             BufferUsage::vertex_buffer(),
             queue.clone(),
@@ -448,8 +460,23 @@ fn main() {
             queue.clone(),
         ).expect("failed to create buffer")
     };
-    vbo_future.join(ibo_future).join(ubo_future).then_signal_fence_and_flush().unwrap().wait(None)
-                                         .unwrap();
+
+    let new_title = format!("Loading image data...");
+    window.window().set_title(&new_title);
+    let (satellite_texture, satellite_future) = {
+        let image = image::open("res/m_3009743_sw_14_1_20141014_20141201.png").unwrap().to_luma();
+        let width = image.width();
+        let height = image.height();
+        let image_data = image.into_raw().clone();
+
+        vulkano::image::immutable::ImmutableImage::from_iter(
+            image_data.iter().cloned(),
+            vulkano::image::Dimensions::Dim2d { width, height, },
+            vulkano::format::R8Unorm,
+            queue.clone()).unwrap()
+    };
+    vbo_future.join(ibo_future).join(ubo_future).join(satellite_future).
+        then_signal_fence_and_flush().unwrap().wait(None).unwrap();
 
 
     // The next step is to create the shaders.
@@ -464,21 +491,21 @@ fn main() {
 #version 450
 layout(location = 0) in vec3 position;
 
-layout(set = 0, binding = 0) uniform sampler2D tex;
-
 layout(push_constant) uniform PushConstants {
     mat4 view;
 } push_constants;
 
 layout(location = 0) out vec2 vs_pos;
 
-layout(set = 0, binding = 1) uniform ProjMatrix {
+layout(set = 0, binding = 2) uniform ProjMatrix {
     mat4 proj;
 } proj_matrix;
 
+const float SCALE_FACTOR = 10.0;
+
 void main() {
     vs_pos = position.xz;
-    gl_Position = proj_matrix.proj * push_constants.view * vec4(position, 1.0);
+    gl_Position = proj_matrix.proj * push_constants.view * vec4(position * 100.0, 1.0);
 }
 "]
         struct Dummy;
@@ -493,6 +520,8 @@ layout(location = 0) out vec4 f_color;
 
 layout(set = 0, binding = 0) uniform sampler2D tex;
 
+layout(set = 0, binding = 1) uniform sampler2D satellite;
+
 layout(push_constant) uniform PushConstants {
     mat4 view;
 } push_constants;
@@ -500,7 +529,9 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) in vec2 vs_pos;
 
 void main() {
-    f_color = vec4(texture(tex, vs_pos).r, texture(tex, vs_pos).r, texture(tex, vs_pos).r, 0.0);
+    f_color =
+    // vec4(texture(tex, vs_pos).r, texture(tex, vs_pos).r, texture(tex, vs_pos).r, 0.0) *
+    vec4(texture(satellite, vs_pos).rrr, 1.0);
 }
 "]
         struct Dummy;
@@ -612,6 +643,8 @@ void main() {
     let mut desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
         .add_sampled_image(image.clone(),
             Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
+        .add_sampled_image(satellite_texture.clone(),
+                           Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
         .add_buffer(uniform_buffer.clone()).unwrap()
         .build().unwrap());
 
@@ -758,6 +791,8 @@ void main() {
 
             let new_desc_set = Arc::new(PersistentDescriptorSet::start(pipeline.clone(), 0)
                 .add_sampled_image(image.clone(),
+                                   Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
+                .add_sampled_image(satellite_texture.clone(),
                                    Sampler::simple_repeat_linear_no_mipmap(device.clone())).unwrap()
                 .add_buffer(uniform_buffer.clone()).unwrap()
                 .build().unwrap());
