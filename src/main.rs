@@ -286,8 +286,8 @@ fn main() {
         .build_vk_surface(&events_loop, instance.clone())
         .unwrap();
 
-    let new_title = format!("Loading terrain data...");
-    window.window().set_title(&new_title);
+    //let new_title = format!("Loading terrain data...");
+    //window.window().set_title(&new_title);
 
     // The next step is to choose which GPU queue will execute our draw commands.
     //
@@ -460,8 +460,8 @@ fn main() {
         ).expect("failed to create buffer")
     };
 
-    let new_title = format!("Loading image data...");
-    window.window().set_title(&new_title);
+    //let new_title = format!("Loading image data...");
+    //window.window().set_title(&new_title);
     let (satellite_texture, satellite_future) = {
         let image = image::open("res/m_3009743_sw_14_1_20141014_20141201.png").unwrap().to_luma();
         let width = image.width();
@@ -608,7 +608,7 @@ void main()
     let vs = vs::Shader::load(device.clone()).expect("failed to create vertex shader module");
     let fs = fs::Shader::load(device.clone()).expect("failed to create fragment shader module");
     let tcs = tcs::Shader::load(device.clone()).expect("failed to create TCS");
-    let tes = tcs::Shader::load(device.clone()).expect("failed to create TES");
+    let tes = tes::Shader::load(device.clone()).expect("failed to create TES");
 
     // At this point, OpenGL initialization would be finished. However in Vulkan it is not. OpenGL
     // implicitely does a lot of computation whenever you draw. In Vulkan, you have to do all this
@@ -719,6 +719,7 @@ void main()
         .add_buffer(uniform_buffer.clone()).unwrap()
         .build().unwrap());
 
+
     // In some situations, the swapchain will become invalid by itself. This includes for example
     // when the window is resized (as the images of the swapchain will no longer match the
     // window's) or, on Android, when the application went to the background and goes back to the
@@ -746,7 +747,7 @@ void main()
                [0.0, 0.0, 0.0, 1.0]],
     };
     let mut previous_second = Instant::now();
-    let mut fps_counter = 0;
+    //let mut fps_counter = 0;
     let mut right_mouse_pressed = false;
     let mut left_mouse_pressed = false;
     let mut mouse_x = 0.0;
@@ -815,11 +816,11 @@ void main()
             push_constants.view[3][3] = world_mat.w.w;
         }
         previous_time = Instant::now();
-        fps_counter += 1;
+        //fps_counter += 1;
         if previous_second.elapsed().as_secs() >= 1 {
-            let new_title = format!("Austin's terrain! (FPS: {})", fps_counter);
-            window.window().set_title(&new_title);
-            fps_counter = 0;
+            //let new_title = format!("Austin's terrain! (FPS: {})", fps_counter);
+            //window.window().set_title(&new_title);
+            //fps_counter = 0;
             previous_second = Instant::now();
         }
 
@@ -970,20 +971,18 @@ void main()
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
             .then_signal_fence_and_flush();
 
-        // TODO: Undo work around
         match future {
             Ok(future) => {
-                future.wait(None).unwrap();
-            }
+                previous_frame_end = Box::new(future) as Box<_>;
+            },
             Err(vulkano::sync::FlushError::OutOfDate) => {
                 recreate_swapchain = true;
+                previous_frame_end = Box::new(vulkano::sync::now(device.clone())) as Box<_>;
             }
             Err(err) => {
                 panic!("{:?}", err);
             }
         };
-
-        previous_frame_end = Box::new(vulkano::sync::now(device.clone())) as Box<_>;
 
         // Note that in more complex programs it is likely that one of `acquire_next_image`,
         // `command_buffer::submit`, or `present` will block for some time. This happens when the
