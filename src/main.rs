@@ -225,7 +225,6 @@ impl Iterator for GridIndex {
 impl ExactSizeIterator for GridIndex { }
 
 fn main() {
-
     // The first step of any vulkan program is to create an instance.
     let instance = {
         // When we create an instance, we have to pass a list of extensions that we want to enable.
@@ -279,13 +278,6 @@ fn main() {
 
     let new_title = format!("Loading terrain data...");
     window.window().set_title(&new_title);
-
-    // Get the dimensions of the viewport. These variables need to be mutable since the viewport
-    // can change size.
-    let mut dimensions = {
-        let (width, height) = window.window().get_inner_size().unwrap();
-        [width, height]
-    };
 
     // The next step is to choose which GPU queue will execute our draw commands.
     //
@@ -343,6 +335,10 @@ fn main() {
     // iterator and throw it away.
     let queue = queues.next().unwrap();
 
+    // The dimensions of the surface.
+    // This variable needs to be mutable since the viewport can change size.
+    let mut dimensions;
+
     // Before we can draw on the surface, we have to create what is called a swapchain. Creating
     // a swapchain allocates the color buffers that will contain the image that will ultimately
     // be visible on the screen. These images are returned alongside with the swapchain.
@@ -352,6 +348,8 @@ fn main() {
         let caps = window
             .capabilities(physical)
             .expect("failed to get surface capabilities");
+
+        dimensions = caps.current_extent.unwrap_or([1024, 768]);
 
         // We choose the dimensions of the swapchain to match the current dimensions of the window.
         // If `caps.current_extent` is `None`, this means that the window size will be determined
@@ -746,10 +744,9 @@ void main() {
         // If the swapchain needs to be recreated, recreate it
         if recreate_swapchain {
             // Get the new dimensions for the viewport/framebuffers.
-            dimensions = {
-                let (new_width, new_height) = window.window().get_inner_size().unwrap();
-                [new_width, new_height]
-            };
+            dimensions = window.capabilities(physical)
+                        .expect("failed to get surface capabilities")
+                        .current_extent.unwrap();
 
             let (new_swapchain, new_images) = match swapchain.recreate_with_dimension(dimensions) {
                 Ok(r) => r,
@@ -857,7 +854,7 @@ void main() {
             // The last two parameters contain the list of resources to pass to the shaders.
             // Since we used an `EmptyPipeline` object, the objects have to be `()`.
             .draw_indexed(pipeline.clone(),
-                  DynamicState {
+                  &DynamicState {
                       line_width: None,
                       // TODO: Find a way to do this without having to dynamically allocate a Vec every frame.
                       viewports: Some(vec![Viewport {
@@ -890,18 +887,21 @@ void main() {
             // the GPU has finished executing the command buffer that draws the triangle.
             .then_swapchain_present(queue.clone(), swapchain.clone(), image_num)
             .then_signal_fence_and_flush();
+
+        // TODO: Undo work around
         match future {
             Ok(future) => {
-                previous_frame_end = Box::new(future) as Box<_>;
-            },
+                future.wait(None).unwrap();
+            }
             Err(vulkano::sync::FlushError::OutOfDate) => {
                 recreate_swapchain = true;
-                previous_frame_end = Box::new(vulkano::sync::now(device.clone())) as Box<_>;
             }
             Err(err) => {
                 panic!("{:?}", err);
             }
         };
+
+        previous_frame_end = Box::new(vulkano::sync::now(device.clone())) as Box<_>;
 
         // Note that in more complex programs it is likely that one of `acquire_next_image`,
         // `command_buffer::submit`, or `present` will block for some time. This happens when the
@@ -917,12 +917,12 @@ void main() {
         events_loop.poll_events(|ev| match ev {
             // on window close event
             winit::Event::WindowEvent {
-                event: winit::WindowEvent::Closed,
-                ..
+                event: winit::WindowEvent::CloseRequested,
+            ..
             } => done = true,
             // on window resize event
             winit::Event::WindowEvent {
-                event: winit::WindowEvent::Resized(_, _),
+                event: winit::WindowEvent::Resized(_),
                 ..
             } => recreate_swapchain = true,
             // whenever the mouse clicks
