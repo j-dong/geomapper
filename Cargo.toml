@@ -7,9 +7,9 @@ authors = ["Jack Youstra <jack@youstra.com>", "James Dong <dong.james.sept14@gma
 debug = true
 
 [dependencies]
-vulkano = "0.10.0"
-vulkano-shader-derive = "0.10.0"
-vulkano-win = "0.10.0"
+vulkano = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano-shader-derive = { git = "https://github.com/vulkano-rs/vulkano" }
+vulkano-win = { git = "https://github.com/vulkano-rs/vulkano" }
 winit = "0.17"
 zip = "0.3.2"
 byteorder = "1.2.2"
